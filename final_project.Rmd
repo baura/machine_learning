@@ -1,0 +1,278 @@
+---
+title: "machine_learning_laura_barin_project"
+author: "Laura Barin"
+date: "August 29, 2016"
+output: html_document
+---
+Here below I extract the csv files and require the necessary libraries.
+
+```{r download_and_load_of_file, echo=T, warning=F, error=F}
+#install.packages("adaptDA", "adabag", "mlbench", "earth", "mda")
+library(caret)
+library(AppliedPredictiveModeling)
+library(ElemStatLearn)
+library(boot)
+library(earth)
+library(mda)
+library(MASS)
+library(adabag)
+library(mlbench)
+library(plyr)
+library(party)
+library(grid)
+library(mvtnorm)
+library(modeltools)
+library(kernlab)
+library(nnet)
+Url<-url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+Url2<-url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+training<-read.csv(Url)
+testing<-read.csv(Url2)
+training<-training[,2:ncol(training)]
+testing<-testing[,2:ncol(testing)]
+```
+
+First let's look at the size of the training dataset.
+
+```{r basic_info, echo=T, warning=F, error=F}
+
+summary(training)
+colnames(training)
+colnames(testing)
+dim(training)
+table(training$user_name)
+```
+So the training set has `dim(training)[1]` observations and `dim(training)[2]` variables, with around 3000 observations per subject.
+Below I divide the variables according to body parts and look at the distribution of each of the the numeric variables.
+I take out all those variables that have missing values for more than 90% of the times.
+Furthermore, I divide training into 2 parts, one called to train my predictive model with 70% of the observations and the other to test it.
+```{r exploratory_analysis, echo=T, warning=F, error=F}
+for(i in 2:ncol(training)){
+training[which(training[,i]=="#DIV/0!"),i]<-NA
+training[which(training[,i]==""),i]<-NA
+}
+
+too_na_cols<-NULL
+for(i in 1:ncol(training)){
+  if (sum(is.na(training[,i]))/nrow(training)>.9) too_na_cols<-c(too_na_cols, i)
+}
+length(too_na_cols)
+
+training<-training[,-too_na_cols]
+ncol(training)
+
+numeric_cols<-NULL
+for(i in 1:ncol(training)){
+  if (class(training[,i])=="numeric" | class(training[,i])=="integer") numeric_cols<-c(numeric_cols, i)
+}
+length(numeric_cols)
+
+
+set.seed(1234)
+inTrain<-createDataPartition(y=training$classe, p=.7, list=F)
+train_train<-training[inTrain, ]
+test_train<-training[-inTrain, ]
+arm_var<-colnames(train_train)[grep(pattern="_arm", x=(colnames(train_train)))]
+dumbbell_var<-colnames(train_train)[grep(pattern="_dumbbell", x=(colnames(train_train)))]
+belt_var<-colnames(train_train)[grep(pattern="_belt", x=(colnames(train_train)))]
+forearm_var<-colnames(train_train)[grep(pattern="_forearm", x=(colnames(train_train)))]
+
+nrow(train_train)
+
+par(mfrow=c(3,2))
+for(i in numeric_cols[1:(length(numeric_cols)-1)]){
+  ord<-which(numeric_cols==i)
+  col<-colnames(train_train)[numeric_cols[ord]]
+  for(class in levels(train_train$classe)){
+  hist(train_train[which(train_train$classe==class),col], main=paste(col,"in class", class), xlab=paste(class))
+  }
+  plot.new()
+}
+
+```
+I turned out that up to `length(too_na_cols)` were for 90% of the observations with not available data. I therefore preferred to kick them out of the training dataset. Checking for collinearity among the left variables might help.
+
+```{r collinearity_check, echo=T, error=F, warning=F}
+mat<-matrix(ncol=length(numeric_cols), nrow=length(numeric_cols))
+err<-matrix(ncol=length(numeric_cols), nrow=length(numeric_cols))
+diag(mat)<-0
+
+for(i in numeric_cols){
+  for(j in setdiff(numeric_cols, i) ){
+    ord1<-which(numeric_cols==i)
+    ord2<-which(numeric_cols==j)
+   mat[ord1,ord2]<-cor(as.numeric(train_train[,i]), as.numeric(train_train[,j]), use="pairwise.complete.obs")
+if (mat[ord1, ord2]>=.7) err[ord1,ord2]<-1
+  }
+  }
+```
+There are therefore `length(which(err==1))/2` pairs of variables that are collinear, but in prediction models this is not an issue. Anyway, for computational time purposes, it is still better to perform principal component analysis on the training subset 
+and then run some classification predictive methods, like classification tree here below.
+```{r first_model_pca_and_ctree, echo=T, error=F, warning=F}
+prePROC<-preProcess(x=train_train, method="pca", thresh = .90)
+prePROC
+trainPC<-predict(prePROC, train_train)
+rownames(train_train)<-1:nrow(train_train)
+testPC<-predict(prePROC, test_train[, ])
+modFit1<-train(classe ~ . , method="ctree", data=trainPC)
+pred1<-predict(modFit1, newdata=testPC, method="glm")
+confusionMatrix(test_train$classe, pred1)$table
+accuracy1<-sum(diag(confusionMatrix(pred1, test_train$classe)$table))/sum(confusionMatrix(pred1, test_train$classe)$table)
+accuracy1
+```
+
+Below here I try a predictor with PCA + linear discriminant analysis.
+```{r first_model_pca_and_lda, echo=T, error=F, warning=F}
+modFit2<-train(classe ~ ., method="lda", data=trainPC)
+pred2<-predict(modFit2, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred2)$table
+accuracy2<-sum(diag(tab))/sum(tab)
+accuracy2
+```
+
+Below here I try a predictor with linear discriminant analysis.
+```{r first_model_pca_and_bagfda, echo=T, error=F, warning=F}
+modFit3<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="rpart", data=trainPC)
+pred3<-predict(modFit3, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred3)$table
+accuracy3<-sum(diag(tab))/sum(tab)
+accuracy3  #too low, so I won't consider it later for the voting stacking.
+```
+
+
+Below here I try a predictor with flexible discriminant analysis.
+```{r first_model_pca_and_fda, echo=T, error=F, warning=F}
+modFit4<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="fda", data=trainPC)
+pred4<-predict(modFit4, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred4)$table
+tab
+accuracy4<-sum(diag(tab))/sum(tab)
+accuracy4
+```
+
+
+Below here I try a predictor with amdai.
+```{r first_model_pca_and_amdai, echo=T, error=F, warning=F}
+modFit5<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="amdai", data=trainPC, na.action = na.omit)
+pred5<-predict(modFit5, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred5)$table
+tab
+accuracy5<-sum(diag(tab))/sum(tab)
+accuracy5 
+```
+
+Below here I try a predictor with deepboost and it doesn't work.
+```{r first_model_pca_and_deepboost, echo=T, error=F, warning=F}
+#modFit6<-train(classe ~ ., method="deepboost", data=trainPC)
+#modFit6<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="deepboost", data=trainPC)
+```
+
+Below here I try a predictor with PCA+ quadratic discriminative analysis.
+```{r first_model_pca_and_qda, echo=T, error=F, warning=F}
+modFit6<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="qda", data=trainPC)
+pred6<-predict(modFit6, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred6)$table
+tab
+accuracy6<-sum(diag(tab))/sum(tab)
+accuracy6 #too bad for an accuracy.
+```
+
+Below here I try a predictor with PCA+ quadratic discriminative analysis.
+```{r first_model_pca_and_linda, echo=T, error=F, warning=F}
+modFit7<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="Linda", data=trainPC) 
+pred7<-predict(modFit7, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred7)$table
+tab
+accuracy7<-sum(diag(tab))/sum(tab)
+accuracy7
+```
+
+
+```{r first_model_pca_and_hda, echo=T, error=F, warning=F}
+#modFit8<-train(classe ~ ., method="hda", data=trainPC, verbose=F) #it didn't work
+modFit8<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="hda", data=trainPC, na.action=na.omit, verbose=F)
+pred8<-predict(modFit8, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred8)$table
+tab
+accuracy8<-sum(diag(tab))/sum(tab)
+accuracy8  #too low, not to be included
+```
+
+```{r first_model_pca_and_hdda, echo=T, error=F, warning=F}
+#modFit9<-train(classe ~ ., method="hdda", data=trainPC, verbose=F) 
+modFit9<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="hdda", data=trainPC, na.action=na.omit)
+pred9<-predict(modFit9, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred9)$table
+tab
+accuracy9<-sum(diag(tab))/sum(tab)
+accuracy9  
+```
+
+```{r first_model_pca_and_lssvmlinear, echo=T, error=F, warning=F}
+modFit10<-train(classe ~ ., method="lssvmLinear", data=trainPC, verbose=F)
+#modFit10<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="loclda", data=trainPC, na.action=na.omit)
+pred10<-predict(modFit10, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred10)$table
+tab
+accuracy10<-sum(diag(tab))/sum(tab)
+accuracy10
+```
+
+```{r first_model_pca_and_pda, echo=T, error=F, warning=F}
+modFit11<-train(classe ~ ., method="pda", data=trainPC, verbose=F)
+#modFit10<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="loclda", data=trainPC, na.action=na.omit)
+pred11<-predict(modFit11, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred11)$table
+tab
+accuracy11<-sum(diag(tab))/sum(tab)
+accuracy11
+```
+
+```{r first_model_pca_and_pda, echo=T, error=F, warning=F}
+modFit12<-train(classe ~ ., method="multinom", data=trainPC, verbose=F)
+#modFit10<-train(classe ~ PC1+PC2+PC3+PC4 +PC5+PC6  + PC7 +PC8+PC9+PC10+PC11+PC12+PC13+PC14+PC15+PC16 +PC17+PC18+PC19+PC20, method="loclda", data=trainPC, na.action=na.omit)
+pred12<-predict(modFit12, newdata=testPC, method="glm")
+tab<-confusionMatrix(test_train$classe, pred12)$table
+tab
+accuracy12<-sum(diag(tab))/sum(tab)
+accuracy12
+```
+
+Below here I combine the predictors with accuracy>=0.5 through a random forest. The accuracy should be higher than any other predictor used so far.
+```{r combined_model_via_stacking, echo=T, error=F, warning=F}
+predictors<-t(rbind(pred1, pred2, pred3, pred4, pred5, pred6, pred7, pred8, pred9, pred10, pred11, pred12))
+dim(predictors)
+accuracies<-c(accuracy1,accuracy2, accuracy3, accuracy4, accuracy5, accuracy6, accuracy7, accuracy8, accuracy9, accuracy10,accuracy11, accuracy12)
+good_predictors<-predictors[,which(accuracies>=0.5)]
+predDF<-data.frame(good_predictors, classe=test_train$classe)
+combModFit<-train(classe~., method="rf", data=predDF)
+print(combModFit)
+combPred<-predict(combModFit, predDF)
+tab<-confusionMatrix(reference=test_train$classe, combPred)$table
+acc_comb<-sum(diag(tab))/sum(tab)
+acc_comb
+```
+
+
+Now I will apply the same process in the testing dataset: principal component analysis, compute those predictors that proved enough accurate on *training*, combine them with the random forest process used above (*combModFit*).
+
+```{r testing_phase, echo=T, warning=F, error=F,  results="hide"}
+for(i in 2:ncol(testing)){
+testing[which(testing[,i]=="#DIV/0!"),i]<-NA
+testing[which(testing[,i]==""),i]<-NA
+}
+
+#compute pca on testing
+PCtest<-predict(prePROC, testing[, ])
+
+#calculate the different predictors (thos ewith accuracy >=0.5) on the pre-processed dataframe PCtest
+predictors_test<-cbind(predict(modFit1, newdata=PCtest), predict(modFit2, newdata=PCtest), predict(modFit4, newdata=PCtest), predict(modFit5, newdata=PCtest),predict(modFit7, newdata=PCtest), predict(modFit9, newdata=PCtest), predict(modFit11, newdata=PCtest), predict(modFit12, newdata=PCtest))
+dim(predictors_test)
+colnames(predictors_test)<-c("pred1", "pred2","pred4","pred5","pred7","pred9","pred11","pred12")
+head(predictors_test)
+predDF_test<-data.frame(predictors_test)
+combPred<-predict(combModFit, predDF_test)
+```
+The predicted levels of the testing dataset are therefore
+
+`as.character(levels(combPred))[combPred]`
