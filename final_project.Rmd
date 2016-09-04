@@ -35,10 +35,11 @@ First let's look at the size of the training dataset.
 
 ```{r basic_info, echo=T, warning=F, error=F, message=F}
 
-summary(training)
-colnames(training)
-colnames(testing)
+#summary(training) #I don't run it here to save space for the html file.
+#colnames(training)
+#colnames(testing)
 dim(training)
+dim(testing)
 table(training$user_name)
 ```
 So the training set has `r dim(training)[1]` observations and `r dim(training)[2]` variables, with around 3000 observations per subject.
@@ -78,15 +79,16 @@ forearm_var<-colnames(train_train)[grep(pattern="_forearm", x=(colnames(train_tr
 
 nrow(train_train)
 
-par(mfrow=c(3,2))
-for(i in numeric_cols[1:(length(numeric_cols)-1)]){
-  ord<-which(numeric_cols==i)
-  col<-colnames(train_train)[numeric_cols[ord]]
-  for(class in levels(train_train$classe)){
-  hist(train_train[which(train_train$classe==class),col], main=paste(col,"in class", class), xlab=paste(class))
-  }
-  plot.new()
-}
+#I don't run it here, because the .html file would be too big.
+#par(mfrow=c(3,2))
+#for(i in numeric_cols[1:(length(numeric_cols)-1)]){
+#  ord<-which(numeric_cols==i)
+#  col<-colnames(train_train)[numeric_cols[ord]]
+#  for(class in levels(train_train$classe)){
+#  hist(train_train[which(train_train$classe==class),col], main=paste(col,"in class", class), xlab=paste(class))
+#  }
+#  plot.new()
+#}
 
 ```
 I turned out that up to `r length(too_na_cols)` were for 90% of the observations with not available data. I therefore preferred to kick them out of the training dataset. Checking for collinearity among the left variables might help.
@@ -256,7 +258,6 @@ testing[which(testing[,i]==""),i]<-NA
 
 #compute pca on testing
 PCtest<-predict(prePROC, testing[, ])
-head(PCtest)
 
 #calculate the different predictors (thos ewith accuracy >=0.5) on the pre-processed dataframe PCtest
 predictors_test<-cbind(predict(modFit1, newdata=PCtest), predict(modFit2, newdata=PCtest), predict(modFit4, newdata=PCtest), predict(modFit5, newdata=PCtest),predict(modFit6, newdata=PCtest),predict(modFit7, newdata=PCtest), predict(modFit9, newdata=PCtest), predict(modFit11, newdata=PCtest), predict(modFit12, newdata=PCtest))
